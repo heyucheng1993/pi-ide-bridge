@@ -4,19 +4,19 @@
 
 [English](README.md)
 
-## 此分支：附件预览
+## 附件预览
 
-搭配此分支的 Pi 扩展使用时，发送文件或选区会显示为输入框上方的附件标签，支持悬停预览和点击 `×` 单独移除。选区请求同时携带文件路径与行号，避免依赖延迟更新的 IDE 状态。终端选区仍直接粘贴。
+发送文件或选区会显示为输入框上方的附件标签，支持悬停预览和点击 `×` 单独移除。选区请求同时携带文件路径与行号，避免依赖延迟更新的 IDE 状态。终端选区仍直接粘贴。
 
-在此目录运行 `npm ci`、`npm run compile`、`npx vsce package --out pi-ide-bridge-vscode-local.vsix`，安装生成的 VSIX 后重载编辑器。对应 Pi 扩展的安装方法见[根目录说明](../README.md)。下方发布版安装说明及 `/ide init` 仍下载上游版本。
+在此目录运行 `npm ci`、`npm run compile`、`npx vsce package --out pi-ide-bridge-vscode-local.vsix`，安装生成的 VSIX 后重载编辑器。对应 Pi 扩展的安装方法见[根目录说明](../README.md)。下方安装说明及 `/ide init` 下载已发布版本；测试尚未发布的修改时，请从源码构建。
 
-## 上游主要功能
+## 主要功能
 
 - 实时上报当前激活文件和所有工作区根目录（支持多根工作区）。
 - 上报当前文本选区（行范围 + 内容）。
 - 上报已打开文件，增强 Pi 中 `@` 文件补全。
 - 定时发送心跳，让 Pi 准确显示“已连接 / 未连接”状态。
-- 在资源管理器中右键任意文件，可把可点击的文件链接插入 Pi 输入框。
+- 在资源管理器中右键任意文件，可将文件作为待发送附件添加到 Pi。
 - 在编辑器中右键选中的文本，可将其发送到 Pi。
 - 在集成终端中右键选中的文本，可将其发送到 Pi。
 - 支持 VS Code、Cursor 和 Trae。
@@ -89,8 +89,8 @@ Pi 会自动检测 PATH 上的 VS Code / Cursor / Trae，从 GitHub 下载最新
 
 ## 插入文件和选区
 
-- **资源管理器**：右键文件并选择 **Insert into Pi Agent**，会把类似 `[filename](file:///path/to/file)` 的 Markdown 链接粘贴到 Pi 输入框。
-- **编辑器**：选中代码后右键，选择 **Send Selection to Pi Agent**，选中的文本会被粘贴到 Pi。
+- **资源管理器**：右键文件并选择 **Insert into Pi Agent**，文件会显示为待发送附件，例如 `[filename.c ×]`。
+- **编辑器**：选中代码后右键，选择 **Send Selection to Pi Agent**，选区会显示为 `[filename.c 1:100 ×]`，选中的文本将随下一条消息发送。
 - **终端**：在集成终端中选中文字，右键选择 **Send Terminal Selection to Pi Agent**。
 
 所有插入操作都会广播到配置端口范围内运行的每一个 Pi 实例。

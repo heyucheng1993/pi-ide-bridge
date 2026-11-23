@@ -45,17 +45,11 @@ Send a file or selection from the IDE, type your request normally, then submit i
 - Mouse controls require fullscreen mode and terminal mouse reporting. In regular mode or multiplexers without hover support, use the slash commands. Attachment numbers are 1-based.
 - Previews are bounded to 200 lines / 64 KiB, reject binary files, and never modify attachment contents. Pending attachments are in memory: send or clear them before reloading, changing sessions, or exiting.
 
-### Install this fork
+### Companion compatibility
 
-```bash
-pi install git:github.com/heyucheng1993/pi-ide-bridge@feat/attachment-previews
-```
+Selection insertion requests include filenames and inclusive line ranges, avoiding races with debounced IDE state. Older companions remain compatible, but labels fall back to cached IDE state. Use the matching companion release for reliable selection metadata. When testing changes that are not yet released, build the companion from source (see [Development](#development)); `/ide init` downloads the latest published release.
 
-Disable other copies of the bridge before loading this one, including an auto-discovered local customization. Otherwise multiple bridge listeners may receive the same IDE action.
-
-The companion source in this fork includes selection filenames and inclusive line ranges in insertion requests, avoiding races with debounced IDE state. Older companions remain compatible, but labels fall back to cached IDE state. Build this fork's companion for reliable selection metadata; `/ide init` still downloads the upstream released companion.
-
-## Install (upstream package)
+## Install
 
 ```bash
 pi install npm:pi-ide-bridge
@@ -64,8 +58,10 @@ pi install npm:pi-ide-bridge
 Or install from git:
 
 ```bash
-pi install git:github.com/Wuhu-dsm/pi-ide-bridge@v0.4.0
+pi install git:github.com/Wuhu-dsm/pi-ide-bridge
 ```
+
+Disable any duplicate bridge extensions, including auto-discovered local customizations, so multiple bridge listeners do not receive the same IDE action.
 
 Then reload Pi:
 
@@ -131,8 +127,6 @@ npx vsce package --out pi-ide-bridge-vscode-local.vsix
 ```
 
 Install the generated VSIX with your editor's **Install from VSIX** command, then reload the editor. The attachment tests use a mock Pi UI and a real localhost HTTP server in a temporary state directory; they cover context delivery, previews, layouts, click/command removal, and cleanup. Actual terminal mouse interaction should also be checked manually.
-
-This fork's attachment workflow is based on [Wuhu-dsm/pi-ide-bridge](https://github.com/Wuhu-dsm/pi-ide-bridge) 0.4.4. Upstream installation instructions above refer to the unmodified released package.
 
 ## License
 

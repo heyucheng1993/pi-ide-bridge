@@ -15,13 +15,13 @@ Companion extension for the [Pi coding agent](https://pi.dev). It sends your edi
 - Right-click selected text in the integrated terminal to send it to Pi.
 - Works in VS Code, Cursor, and Trae.
 
-## Attachment preview fork
+## Attachment previews
 
-With this fork's Pi extension, files and selections appear as labels above the prompt, with hover previews and individual `×` remove controls. Selection requests include their own filename and line range, so labels do not depend on potentially delayed IDE state updates. Terminal selections still paste into the prompt.
+Files and selections appear as labels above the Pi prompt, with hover previews and individual `×` remove controls. Selection requests include their own filename and line range, so labels do not depend on potentially delayed IDE state updates. Terminal selections still paste into the prompt.
 
-To use this fork's companion, run `npm ci`, `npm run compile`, and `npx vsce package --out pi-ide-bridge-vscode-local.vsix` in this directory, then install the generated VSIX and reload the editor. See the [root README](../README.md) for installing the matching Pi extension. The quick/manual release installation steps below still download the upstream companion.
+To build the companion from source, run `npm ci`, `npm run compile`, and `npx vsce package --out pi-ide-bridge-vscode-local.vsix` in this directory, then install the generated VSIX and reload the editor. See the [root README](../README.md) for installing the matching Pi extension. `/ide init` and the manual release installation steps below download published releases; build from source when testing changes that are not yet released.
 
-## Quick install (upstream release)
+## Quick install (recommended)
 
 If you already have the Pi IDE Bridge extension installed in Pi, just run:
 

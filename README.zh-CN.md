@@ -4,9 +4,9 @@ Pi 扩展，用于把 IDE（VS Code、Cursor、Trae）和 Pi 编程助手连接�
 
 [English](README.md)
 
-## 此分支：附件预览
+## 附件预览
 
-此分支将文件和代码选区显示为输入框上方的附件标签（例如 `[example.c ×]`、`[example.c 10:25 ×]`），不再直接粘贴到输入框。悬停可预览，点击红色 `×` 可单独移除；终端选区仍直接粘贴。
+文件和代码选区显示为输入框上方的附件标签（例如 `[example.c ×]`、`[example.c 10:25 ×]`），不再直接粘贴到输入框。悬停可预览，点击红色 `×` 可单独移除；终端选区仍直接粘贴。
 
 - `/ide-preview [编号]`：预览附件。
 - `/ide-remove-attachment [编号]`：移除一个附件。
@@ -15,15 +15,15 @@ Pi 扩展，用于把 IDE（VS Code、Cursor、Trae）和 Pi 编程助手连接�
 - 鼠标操作需要 Pi 全屏模式和终端鼠标支持；普通模式可使用上述命令。
 - 需要 Pi / pi-tui 1.5.2 或更新版本。配套扩展源码包含准确的选区文件名和行号。
 
-安装此分支：`pi install git:github.com/heyucheng1993/pi-ide-bridge@feat/attachment-previews`。请先停用其他重复加载的 bridge 扩展。构建配套 VSIX 和运行测试的方法见 [English README](README.md#development)。下方 npm 安装说明和 `/ide init` 仍指向上游已发布版本。
+请先停用其他重复加载的 bridge 扩展。构建配套 VSIX 和运行测试的方法见 [English README](README.md#development)。旧版配套扩展仍可使用，但附件标签中的文件名和行号会回退到缓存的 IDE 状态。请使用匹配的配套扩展版本；测试尚未发布的修改时，可从源码构建配套 VSIX，`/ide init` 下载的始终是最新已发布版本。
 
-## 上游主要功能
+## 主要功能
 
 - **实时 IDE 上下文**：当前文件、工作区根目录、已打开文件、当前选区。
 - **支持多根工作区**。
 - **自动连接状态**：显示 `VS Code: connected` / `Cursor: connected` / `Trae: connected`，IDE 关闭后自动回到 `not connected`。
 - 通过 `/ide-ping` **心跳**精确检测断开。
-- 从 IDE **插入文件/终端选区**到 Pi 的输入框。
+- 从 IDE 发送文件和代码选区，在输入框上方显示为**待发送附件**，支持悬停预览和单独移除；终端选区仍直接粘贴到输入框。
 - 用已打开的 IDE 文件**增强 `@` 自动补全**。
 - 通过 `/ide init`**一键安装配套编辑器扩展**。
 - **Slash 命令**：
@@ -34,9 +34,12 @@ Pi 扩展，用于把 IDE（VS Code、Cursor、Trae）和 Pi 编程助手连接�
   - `/ide-insert-selection`
   - `/ide-open-files`
   - `/ide-clear-selection`
+  - `/ide-preview [编号]` — 预览附件
+  - `/ide-remove-attachment [编号]` — 移除一个附件
+  - `/ide-clear-attachments` — 清空待发送附件
 - **快捷键**：
-  - `Ctrl+Shift+A` / `Cmd+Shift+A`：插入当前文件
-  - `Ctrl+Shift+S` / `Cmd+Shift+S`：插入当前选区
+  - `Ctrl+Shift+A` / `Cmd+Shift+A`：附加当前文件
+  - `Ctrl+Shift+S` / `Cmd+Shift+S`：附加当前选区
 
 ## 安装
 
@@ -47,7 +50,7 @@ pi install npm:pi-ide-bridge
 或者用 git 安装：
 
 ```bash
-pi install git:github.com/Wuhu-dsm/pi-ide-bridge@v0.4.0
+pi install git:github.com/Wuhu-dsm/pi-ide-bridge
 ```
 
 然后重载 Pi：
