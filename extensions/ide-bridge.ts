@@ -7,7 +7,8 @@
  * - Injects the active file and selection into the LLM context on each prompt,
  *   then clears the selection so stale code is not carried into follow-ups.
  * - Enhances `@` autocompletion with IDE open files.
- * - Accepts file/terminal insertions from the companion IDE extension.
+ * - Queues files and selections as previewable, removable prompt attachments.
+ * - Accepts terminal insertions from the companion IDE extension.
  * - Tracks IDE heartbeats and reverts to "not connected" when the IDE goes away.
  * - Provides `/ide init` to download and install the companion IDE extension.
  *
@@ -24,6 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExecResult } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions, KeyId } from "@earendil-works/pi-tui";
+import { AttachmentWidget, PreviewPanel, type IDEAttachment } from "./lib/attachment-preview.ts";
 
 interface IDESelection {
 	text: string;
@@ -50,6 +52,9 @@ interface IDEFileInsert {
 interface IDETextInsert {
 	type: "text";
 	text: string;
+	path?: string;
+	startLine?: number;
+	endLine?: number;
 }
 
 interface IDETerminalInsert {
@@ -401,7 +406,12 @@ function validateIDEInsertRequest(request: unknown): request is IDEInsertRequest
 	if (typeof request !== "object" || request === null) return false;
 	const r = request as Record<string, unknown>;
 	if (r.type === "file") return typeof r.path === "string";
-	if (r.type === "text") return typeof r.text === "string";
+	if (r.type === "text") {
+		return typeof r.text === "string"
+			&& (r.path === undefined || typeof r.path === "string")
+			&& (r.startLine === undefined || (Number.isInteger(r.startLine) && (r.startLine as number) >= 0))
+			&& (r.endLine === undefined || (Number.isInteger(r.endLine) && (r.endLine as number) >= 0));
+	}
 	if (r.type === "terminal") return typeof r.text === "string";
 	return false;
 }
@@ -553,6 +563,38 @@ export default function (pi: ExtensionAPI): void {
 	let currentCtx: ExtensionContext | undefined;
 	let lastActivityAt = 0;
 	let heartbeatTimer: NodeJS.Timeout | undefined;
+	let attachments: IDEAttachment[] = [];
+	let attachmentWidget: AttachmentWidget | undefined;
+
+	function updateAttachments(ctx: ExtensionContext): void {
+		attachmentWidget?.dispose();
+		attachmentWidget = undefined;
+		ctx.ui.setWidget("ide-attachments", attachments.length ? (tui, theme) => {
+			attachmentWidget?.dispose();
+			attachmentWidget = new AttachmentWidget(tui, theme, attachments, (item) => removeAttachment(ctx, item));
+			return attachmentWidget;
+		} : undefined);
+	}
+
+	function removeAttachment(ctx: ExtensionContext, item: IDEAttachment): void {
+		if (!attachments.includes(item)) return;
+		attachments = attachments.filter((existing) => existing !== item);
+		// Do not immediately resend the removed selection through cached IDE context.
+		if (item.selectionText !== undefined && state.selection
+			&& item.filePath === (state.activeFile ?? undefined)
+			&& (item.startLine === state.selection.startLine || item.selectionText === state.selection.text)) {
+			state.selection = null;
+			updateStatus(ctx);
+		}
+		updateAttachments(ctx);
+	}
+
+	function attach(ctx: ExtensionContext, item: IDEAttachment): void {
+		if (!attachments.some((existing) => existing.label === item.label && existing.content === item.content)) {
+			attachments.push(item);
+		}
+		updateAttachments(ctx);
+	}
 
 	function updateStatus(ctx: ExtensionContext): void {
 		const status = formatStatus(state, boundPort);
@@ -618,17 +660,27 @@ export default function (pi: ExtensionAPI): void {
 		if (ctx.mode !== "tui") return;
 
 		if (request.type === "file") {
-			ctx.ui.pasteToEditor(fileToMarkdownLink(request.path));
+			const label = path.posix.basename(request.path.replace(/\\/g, "/"));
+			attach(ctx, { label, filePath: request.path, content: `Attached IDE file: ${request.path}\nRead this file when needed for the user's request.` });
+		} else if (request.type === "text") {
+			if (!request.text.trim()) return;
+			const file = request.path ?? state.activeFile;
+			const start = request.startLine ?? state.selection?.startLine;
+			const end = request.endLine ?? state.selection?.endLine;
+			const name = file ? path.posix.basename(file.replace(/\\/g, "/")) : "selection";
+			const range = start !== undefined && end !== undefined ? ` ${start + 1}:${end + 1}` : "";
+			attach(ctx, {
+				label: `${name}${range}`,
+				filePath: file ?? undefined,
+				selectionText: request.text,
+				startLine: start,
+				content: `Attached IDE selection: ${file ?? "unknown file"}${range}\n\n${request.text}`,
+			});
 		} else {
 			const text = request.text.trim();
-			if (!text) return;
-			ctx.ui.pasteToEditor(text);
+			if (text) ctx.ui.pasteToEditor(text);
+			updateStatus(ctx);
 		}
-
-		// pasteToEditor mutates the editor state directly; the TUI only re-renders
-		// automatically on real terminal input. Force an immediate render by
-		// refreshing the footer status (which calls requestRender internally).
-		updateStatus(ctx);
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -762,6 +814,8 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async () => {
+		attachmentWidget?.dispose();
+		attachmentWidget = undefined;
 		persistState(state);
 		if (heartbeatTimer) {
 			clearInterval(heartbeatTimer);
@@ -778,13 +832,17 @@ export default function (pi: ExtensionAPI): void {
 		resetState();
 	});
 
-	pi.on("before_agent_start", async (_event, ctx) => {
-		if (ctx.mode !== "tui") return;
-		if (!state.connected) return;
-		if (!state.activeFile && !state.selection) return;
-
-		const message = buildContextMessage(state);
+	pi.on("before_agent_start", async (event, ctx) => {
+		if (ctx.mode !== "tui" || event.messageType !== "user") return;
+		const parts: string[] = [];
+		if (state.connected && (state.activeFile || state.selection)) {
+			parts.push(buildContextMessage(state));
+		}
+		parts.push(...attachments.map((item) => item.content));
+		const message = parts.filter(Boolean).join("\n\n");
 		if (!message) return;
+		attachments = [];
+		updateAttachments(ctx);
 
 		// Clear the selection after it has been used so it does not pollute
 		// follow-up turns indefinitely.
@@ -799,6 +857,71 @@ export default function (pi: ExtensionAPI): void {
 				display: false,
 			},
 		};
+	});
+
+	pi.registerCommand("ide-preview", {
+		description: "Preview a pending IDE attachment (optional 1-based attachment number)",
+		handler: async (args, ctx) => {
+			if (ctx.mode !== "tui") return;
+			if (!attachments.length) {
+				ctx.ui.notify("No pending IDE attachments", "info");
+				return;
+			}
+			const pending = [...attachments];
+			let index = args.trim() ? Number(args.trim()) - 1 : 0;
+			if (!args.trim() && pending.length > 1) {
+				const choices = pending.map((item, i) => `${i + 1}. ${item.label}`);
+				const choice = await ctx.ui.select("Preview attachment", choices);
+				if (!choice) return;
+				index = choices.indexOf(choice);
+			}
+			const item = Number.isInteger(index) ? pending[index] : undefined;
+			if (!item) {
+				ctx.ui.notify(`Choose an attachment number from 1 to ${pending.length}`, "warning");
+				return;
+			}
+			attachmentWidget?.closePreview();
+			await ctx.ui.custom<void>((tui, theme, _keys, done) => {
+				const panel = new PreviewPanel(tui, theme, item, () => done());
+				void panel.load();
+				return panel;
+			}, { overlay: true, overlayOptions: { width: "90%", anchor: "center" } });
+		},
+	});
+
+	pi.registerCommand("ide-remove-attachment", {
+		description: "Remove one pending IDE attachment (optional 1-based attachment number)",
+		handler: async (args, ctx) => {
+			if (ctx.mode !== "tui") return;
+			const pending = [...attachments];
+			if (!pending.length) {
+				ctx.ui.notify("No pending IDE attachments", "info");
+				return;
+			}
+			let index = args.trim() ? Number(args.trim()) - 1 : 0;
+			if (!args.trim() && pending.length > 1) {
+				const choices = pending.map((item, i) => `${i + 1}. ${item.label}`);
+				const choice = await ctx.ui.select("Remove attachment", choices);
+				if (!choice) return;
+				index = choices.indexOf(choice);
+			}
+			const item = Number.isInteger(index) ? pending[index] : undefined;
+			if (!item) {
+				ctx.ui.notify(`Choose an attachment number from 1 to ${pending.length}`, "warning");
+				return;
+			}
+			removeAttachment(ctx, item);
+		},
+	});
+
+	pi.registerCommand("ide-clear-attachments", {
+		description: "Remove all pending IDE attachments from the next prompt",
+		handler: async (_args, ctx) => {
+			attachments = [];
+			state.selection = null;
+			updateAttachments(ctx);
+			updateStatus(ctx);
+		},
 	});
 
 	pi.registerCommand("ide-state", {
@@ -833,36 +956,31 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("ide-insert-active-file", {
-		description: "Insert the active IDE file into the editor",
+		description: "Attach the active IDE file to the next prompt",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") return;
 			if (!state.activeFile) {
 				ctx.ui.notify("No active IDE file", "warning");
 				return;
 			}
-			ctx.ui.pasteToEditor(fileToMarkdownLink(state.activeFile));
-			updateStatus(ctx);
+			insertIntoEditor(ctx, { type: "file", path: state.activeFile });
 		},
 	});
 
 	pi.registerCommand("ide-insert-selection", {
-		description: "Insert the current IDE selection into the editor as a code block",
+		description: "Attach the current IDE selection to the next prompt",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") return;
 			if (!state.selection?.text) {
 				ctx.ui.notify("No IDE selection", "warning");
 				return;
 			}
-			const sel = state.selection;
-			const langHint = state.activeFile ? (state.activeFile.split(".").pop() ?? "") : "";
-			const fenceOpen = langHint ? `\`\`\`${langHint}` : "\`\`\`";
-			ctx.ui.pasteToEditor(`${fenceOpen}\n${sel.text}\n\`\`\``);
-			updateStatus(ctx);
+			insertIntoEditor(ctx, { type: "text", text: state.selection.text });
 		},
 	});
 
 	pi.registerCommand("ide-open-files", {
-		description: "Pick an open IDE file and insert it into the editor",
+		description: "Pick an open IDE file and attach it to the next prompt",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") return;
 			if (!state.connected || state.openFiles.length === 0) {
@@ -872,8 +990,7 @@ export default function (pi: ExtensionAPI): void {
 			const uniqueFiles = Array.from(new Set(state.openFiles));
 			const chosen = await ctx.ui.select("Open IDE files", uniqueFiles);
 			if (!chosen) return;
-			ctx.ui.pasteToEditor(fileToMarkdownLink(chosen));
-			updateStatus(ctx);
+			insertIntoEditor(ctx, { type: "file", path: chosen });
 		},
 	});
 
@@ -986,31 +1103,26 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.registerShortcut("ctrl+shift+a" as KeyId, {
-		description: "Insert the active IDE file into the editor",
+		description: "Attach the active IDE file to the next prompt",
 		handler: (ctx) => {
 			if (ctx.mode !== "tui") return;
 			if (!state.activeFile) {
 				ctx.ui.notify("No active IDE file", "warning");
 				return;
 			}
-			ctx.ui.pasteToEditor(fileToMarkdownLink(state.activeFile));
-			updateStatus(ctx);
+			insertIntoEditor(ctx, { type: "file", path: state.activeFile });
 		},
 	});
 
 	pi.registerShortcut("ctrl+shift+s" as KeyId, {
-		description: "Insert the current IDE selection into the editor",
+		description: "Attach the current IDE selection to the next prompt",
 		handler: (ctx) => {
 			if (ctx.mode !== "tui") return;
 			if (!state.selection?.text) {
 				ctx.ui.notify("No IDE selection", "warning");
 				return;
 			}
-			const sel = state.selection;
-			const langHint = state.activeFile ? (state.activeFile.split(".").pop() ?? "") : "";
-			const fenceOpen = langHint ? `\`\`\`${langHint}` : "\`\`\`";
-			ctx.ui.pasteToEditor(`${fenceOpen}\n${sel.text}\n\`\`\``);
-			updateStatus(ctx);
+			insertIntoEditor(ctx, { type: "text", text: state.selection.text });
 		},
 	});
 }

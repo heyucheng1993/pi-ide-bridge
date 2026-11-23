@@ -4,7 +4,20 @@ Pi 扩展，用于把 IDE（VS Code、Cursor、Trae）和 Pi 编程助手连接�
 
 [English](README.md)
 
-## 主要功能
+## 此分支：附件预览
+
+此分支将文件和代码选区显示为输入框上方的附件标签（例如 `[example.c ×]`、`[example.c 10:25 ×]`），不再直接粘贴到输入框。悬停可预览，点击红色 `×` 可单独移除；终端选区仍直接粘贴。
+
+- `/ide-preview [编号]`：预览附件。
+- `/ide-remove-attachment [编号]`：移除一个附件。
+- `/ide-clear-attachments`：清空待发送附件。
+- 附件随下一条用户消息发送，之后标签清空。重载或切换会话前请先发送或清除附件。
+- 鼠标操作需要 Pi 全屏模式和终端鼠标支持；普通模式可使用上述命令。
+- 需要 Pi / pi-tui 1.5.2 或更新版本。配套扩展源码包含准确的选区文件名和行号。
+
+安装此分支：`pi install git:github.com/heyucheng1993/pi-ide-bridge@feat/attachment-previews`。请先停用其他重复加载的 bridge 扩展。构建配套 VSIX 和运行测试的方法见 [English README](README.md#development)。下方 npm 安装说明和 `/ide init` 仍指向上游已发布版本。
+
+## 上游主要功能
 
 - **实时 IDE 上下文**：当前文件、工作区根目录、已打开文件、当前选区。
 - **支持多根工作区**。

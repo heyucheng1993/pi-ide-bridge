@@ -26,6 +26,9 @@ interface IDEFileInsert {
 interface IDETextInsert {
 	type: "text";
 	text: string;
+	path?: string;
+	startLine?: number;
+	endLine?: number;
 }
 
 interface IDETerminalInsert {
@@ -266,7 +269,10 @@ export function activate(context: vscode.ExtensionContext): void {
 			return;
 		}
 		const text = editor.document.getText(editor.selection);
-		broadcastInsert(basePort, { type: "text", text }, logger);
+		// Snapshot the location alongside the text: debounced IDE state may lag.
+		const startLine = editor.selection.start.line;
+		const endLine = Math.max(startLine, editor.selection.end.line - (editor.selection.end.character === 0 ? 1 : 0));
+		broadcastInsert(basePort, { type: "text", text, path: editor.document.uri.fsPath, startLine, endLine }, logger);
 		logger.info(`Inserted editor selection (${text.length} chars)`);
 	}
 

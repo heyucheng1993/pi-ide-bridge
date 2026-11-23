@@ -3,6 +3,10 @@
 	"version": "0.4.4",
 	"description": "IDE bridge extension for Pi: VS Code / Cursor / Trae context, file inserts, and heartbeat support.",
 	"main": "extensions/ide-bridge.ts",
+	"scripts": {
+		"test": "node test/attachments.cjs",
+		"typecheck": "tsc --noEmit"
+	},
 	"keywords": [
 		"pi-package",
 		"pi-extension",
@@ -28,11 +32,18 @@
 	],
 	"pi": {
 		"extensions": [
-			"./extensions"
+			"./extensions/ide-bridge.ts"
 		]
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*"
+		"@earendil-works/pi-coding-agent": ">=1.5.2",
+		"@earendil-works/pi-tui": ">=1.5.2"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "^1.5.2",
+		"@earendil-works/pi-tui": "^1.5.2",
+		"@types/node": "^22.19.19",
+		"jiti": "^2.7.0",
+		"typescript": "^5.9.3"
 	}
 }

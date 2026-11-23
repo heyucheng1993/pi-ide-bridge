@@ -10,12 +10,18 @@ Companion extension for the [Pi coding agent](https://pi.dev). It sends your edi
 - Reports the current text selection (line range + content).
 - Reports open files for enhanced `@` file completion in Pi.
 - Sends periodic heartbeats so Pi can show an accurate "connected" / "not connected" status.
-- Right-click any file in the Explorer to insert a clickable link into the Pi input editor.
-- Right-click selected text in the editor to send it to Pi.
+- Right-click any file in the Explorer to attach it to the next Pi prompt.
+- Right-click selected text in the editor to attach an exact snapshot with its filename and inclusive line range.
 - Right-click selected text in the integrated terminal to send it to Pi.
 - Works in VS Code, Cursor, and Trae.
 
-## Quick install (recommended)
+## Attachment preview fork
+
+With this fork's Pi extension, files and selections appear as labels above the prompt, with hover previews and individual `×` remove controls. Selection requests include their own filename and line range, so labels do not depend on potentially delayed IDE state updates. Terminal selections still paste into the prompt.
+
+To use this fork's companion, run `npm ci`, `npm run compile`, and `npx vsce package --out pi-ide-bridge-vscode-local.vsix` in this directory, then install the generated VSIX and reload the editor. See the [root README](../README.md) for installing the matching Pi extension. The quick/manual release installation steps below still download the upstream companion.
+
+## Quick install (upstream release)
 
 If you already have the Pi IDE Bridge extension installed in Pi, just run:
 
@@ -83,8 +89,8 @@ Shortcuts can be customized in your editor's keyboard settings.
 
 ## Inserting files and selections
 
-- **Explorer**: right-click a file and choose **Insert into Pi Agent**. A markdown link like `[filename](file:///path/to/file)` is pasted into the Pi input editor.
-- **Editor**: select code, right-click, and choose **Send Selection to Pi Agent**. The selected text is pasted into Pi.
+- **Explorer**: right-click a file and choose **Insert into Pi Agent**. The file appears as a pending attachment, e.g. `[filename.c ×]`.
+- **Editor**: select code, right-click, and choose **Send Selection to Pi Agent**. The selection appears as `[filename.c 1:100 ×]`; the text is saved for the next prompt.
 - **Terminal**: select text in the integrated terminal, right-click, and choose **Send Terminal Selection to Pi Agent**.
 
 All insert actions are broadcast to every running Pi instance on the configured port range.
