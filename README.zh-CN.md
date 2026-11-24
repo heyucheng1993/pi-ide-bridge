@@ -19,7 +19,7 @@ Pi 扩展，用于把 IDE（VS Code、Cursor、Trae）和 Pi 编程助手连接�
 
 ## 主要功能
 
-- **实时 IDE 上下文**：当前文件、工作区根目录、已打开文件、当前选区。
+- **默认仅发送显式附件**：文件和选区只有加入附件列表后才发送给模型。自动附加当前文件引用可选，默认关闭；实时 IDE 状态仍可用于本地命令和自动补全。
 - **支持多根工作区**。
 - **自动连接状态**：显示 `VS Code: connected` / `Cursor: connected` / `Trae: connected`，IDE 关闭后自动回到 `not connected`。
 - 通过 `/ide-ping` **心跳**精确检测断开。
@@ -29,6 +29,7 @@ Pi 扩展，用于把 IDE（VS Code、Cursor、Trae）和 Pi 编程助手连接�
 - **Slash 命令**：
   - `/ide init` — 安装 VS Code / Cursor / Trae 配套扩展
   - `/ide-state`
+  - `/ide-auto-file [on|off]` — 开启或关闭自动附加当前文件引用；不带参数查看状态
   - `/ide-bridge-port`
   - `/ide-insert-active-file`
   - `/ide-insert-selection`
@@ -40,6 +41,26 @@ Pi 扩展，用于把 IDE（VS Code、Cursor、Trae）和 Pi 编程助手连接�
 - **快捷键**：
   - `Ctrl+Shift+A` / `Cmd+Shift+A`：附加当前文件
   - `Ctrl+Shift+S` / `Cmd+Shift+S`：附加当前选区
+
+## 自动附加当前文件设置
+
+自动 IDE 上下文**默认关闭**。附件列表为空时，不发送任何 IDE 上下文，重载后也是如此。页脚仅显示连接状态，不显示文件名或选区行号。
+
+- `/ide-auto-file on`：IDE 连接时，每条用户消息自动包含当前文件路径引用。
+- `/ide-auto-file off`：仅发送显式附件（默认）。
+- `/ide-auto-file`：查看当前开关状态；`/ide-state` 也会显示此设置。
+
+设置全局保存在 `~/.pi/agent/ide-bridge-settings.json`（或 `$PI_AGENT_DIR/ide-bridge-settings.json`），重载和重启后保持：
+
+```json
+{
+  "autoIncludeActiveFile": false
+}
+```
+
+命令修改立即对当前 Pi 实例生效；其他已运行实例需重载。手动修改 JSON 后执行 `/reload`。文件缺失或内容无效时，默认关闭。
+
+开启后也只自动发送当前文件路径，不发送文件内容、工作区根目录、其他已打开文件或实时选区。选区始终需要显式添加附件。同一路径已有完整文件附件时，不再重复发送自动引用。移除或清空附件不会关闭此开关；请使用 `/ide-auto-file off`。
 
 ## 安装
 

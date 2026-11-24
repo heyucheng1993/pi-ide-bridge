@@ -3,9 +3,9 @@
  *
  * Provides IDE context awareness for VS Code / Cursor / Trae:
  * - Receives active file, open files, workspace roots, and current selection.
- * - Displays the active file/selection in the footer status bar.
- * - Injects the active file and selection into the LLM context on each prompt,
- *   then clears the selection so stale code is not carried into follow-ups.
+ * - Displays IDE connection state in the footer status bar.
+ * - Sends explicit pending attachments, with optional automatic active-file context
+ *   controlled by /ide-auto-file (off by default). Selections are explicit-only.
  * - Enhances `@` autocompletion with IDE open files.
  * - Queues files and selections as previewable, removable prompt attachments.
  * - Accepts terminal insertions from the companion IDE extension.
@@ -83,6 +83,7 @@ const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024; // 10 MB
 const HEARTBEAT_INTERVAL_MS = 2_000;
 const HEARTBEAT_TIMEOUT_MS = 5_000;
 
+const SETTINGS_FILE_NAME = "ide-bridge-settings.json";
 const STATE_FILE_NAME = "ide-bridge-state.json";
 const STATE_MAX_AGE_MS = 60_000;
 
@@ -102,6 +103,16 @@ function getPortFilePath(): string {
 
 function getStateFilePath(): string {
 	return path.join(getAgentDir(), STATE_FILE_NAME);
+}
+
+function loadAutoIncludeActiveFile(): boolean {
+	try {
+		const settings = JSON.parse(fs.readFileSync(path.join(getAgentDir(), SETTINGS_FILE_NAME), "utf8"));
+		return settings?.autoIncludeActiveFile === true;
+	} catch {
+		// Missing or invalid settings must never enable implicit context.
+		return false;
+	}
 }
 
 interface PersistedIDEState {
@@ -233,37 +244,7 @@ function formatStatus(state: IDEState, boundPort: number | null): string | undef
 		return boundPort !== null ? `IDE: not connected (port ${boundPort})` : "IDE: not connected";
 	}
 
-	const editorLabel = getEditorLabel(state.editor);
-	const fileName = state.activeFile
-		? getRelativeFileDisplay(state.activeFile, state.workspaceRoots)
-		: "connected";
-	const selectionInfo = state.selection ? ` [${state.selection.startLine + 1}-${state.selection.endLine + 1}]` : "";
-
-	return `${editorLabel}: ${fileName}${selectionInfo}`;
-}
-
-function buildContextMessage(state: IDEState): string {
-	const parts: string[] = [];
-
-	const workspaceRoot = state.workspaceRoots[0];
-	if (workspaceRoot) {
-		parts.push(`IDE workspace root: ${workspaceRoot}`);
-	}
-
-	if (state.activeFile) {
-		parts.push(`Active IDE file: ${state.activeFile}`);
-	}
-
-	if (state.selection?.text) {
-		const sel = state.selection;
-		const langHint = state.activeFile ? (state.activeFile.split(".").pop() ?? "") : "";
-		const fenceOpen = langHint ? `\`\`\`${langHint}` : "\`\`\`";
-		parts.push(
-			`Selected code in IDE (lines ${sel.startLine + 1}-${sel.endLine + 1}):\n${fenceOpen}\n${sel.text}\n\`\`\``,
-		);
-	}
-
-	return parts.join("\n\n");
+	return `${getEditorLabel(state.editor)}: connected`;
 }
 
 function extractAtToken(textBeforeCursor: string): string | undefined {
@@ -563,6 +544,7 @@ export default function (pi: ExtensionAPI): void {
 	let currentCtx: ExtensionContext | undefined;
 	let lastActivityAt = 0;
 	let heartbeatTimer: NodeJS.Timeout | undefined;
+	let autoIncludeActiveFile = false;
 	let attachments: IDEAttachment[] = [];
 	let attachmentWidget: AttachmentWidget | undefined;
 
@@ -579,7 +561,7 @@ export default function (pi: ExtensionAPI): void {
 	function removeAttachment(ctx: ExtensionContext, item: IDEAttachment): void {
 		if (!attachments.includes(item)) return;
 		attachments = attachments.filter((existing) => existing !== item);
-		// Do not immediately resend the removed selection through cached IDE context.
+		// Clear the matching cached selection along with the removed attachment.
 		if (item.selectionText !== undefined && state.selection
 			&& item.filePath === (state.activeFile ?? undefined)
 			&& (item.startLine === state.selection.startLine || item.selectionText === state.selection.text)) {
@@ -686,6 +668,7 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		currentCtx = ctx;
+		autoIncludeActiveFile = loadAutoIncludeActiveFile();
 
 		const persisted = loadPersistedState();
 		if (persisted) {
@@ -834,18 +817,19 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		if (ctx.mode !== "tui" || event.messageType !== "user") return;
-		const parts: string[] = [];
-		if (state.connected && (state.activeFile || state.selection)) {
-			parts.push(buildContextMessage(state));
+		const parts = attachments.map((item) => item.content);
+		// Only the active file reference is automatic, and only after explicit opt-in.
+		// Workspace roots, open files, and live selections remain local to the bridge.
+		if (autoIncludeActiveFile && state.connected && state.activeFile
+			&& !attachments.some((item) => item.filePath === state.activeFile && item.selectionText === undefined)) {
+			parts.unshift(`Active IDE file: ${state.activeFile}`);
 		}
-		parts.push(...attachments.map((item) => item.content));
 		const message = parts.filter(Boolean).join("\n\n");
 		if (!message) return;
 		attachments = [];
 		updateAttachments(ctx);
 
-		// Clear the selection after it has been used so it does not pollute
-		// follow-up turns indefinitely.
+		// Clear the cached selection after sending attachments, as before.
 		const hadSelection = state.selection !== null;
 		state.selection = null;
 		if (hadSelection) updateStatus(ctx);
@@ -857,6 +841,30 @@ export default function (pi: ExtensionAPI): void {
 				display: false,
 			},
 		};
+	});
+
+	pi.registerCommand("ide-auto-file", {
+		description: "Automatically include the active IDE file: /ide-auto-file on|off (default: off; no argument shows status)",
+		handler: async (args, ctx) => {
+			if (ctx.mode !== "tui") return;
+			const value = args.trim().toLowerCase();
+			if (value && value !== "on" && value !== "off") {
+				ctx.ui.notify("Usage: /ide-auto-file [on|off]", "warning");
+				return;
+			}
+			if (value) {
+				try {
+					fs.mkdirSync(getAgentDir(), { recursive: true });
+					fs.writeFileSync(path.join(getAgentDir(), SETTINGS_FILE_NAME),
+						`${JSON.stringify({ autoIncludeActiveFile: value === "on" }, null, 2)}\n`, "utf8");
+					autoIncludeActiveFile = value === "on";
+				} catch (err) {
+					ctx.ui.notify(`Could not save IDE bridge setting: ${err instanceof Error ? err.message : String(err)}`, "error");
+					return;
+				}
+			}
+			ctx.ui.notify(`Automatic active IDE file: ${autoIncludeActiveFile ? "on" : "off"}. Selections require explicit attachment.`, "info");
+		},
 	});
 
 	pi.registerCommand("ide-preview", {
@@ -930,6 +938,7 @@ export default function (pi: ExtensionAPI): void {
 			const lines = [
 				`Bound port: ${boundPort ?? "none"}`,
 				`Connected: ${state.connected ? "yes" : "no"}`,
+				`Automatic active file: ${autoIncludeActiveFile ? "on" : "off"}`,
 				`Editor: ${state.editor ?? "none"}`,
 				`Active file: ${state.activeFile ?? "none"}`,
 				`Workspace roots: ${state.workspaceRoots.length}`,

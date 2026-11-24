@@ -13,7 +13,7 @@ const { createJiti } = require('jiti');
   process.env.PI_IDE_BRIDGE_PORT = String(probe.address().port);
   await new Promise(resolve => probe.close(resolve));
   const handlers = {}, commands = {}, widgets = new Map(), pasted = [];
-  const listeners = new Set(), overlays = [];
+  const listeners = new Set(), overlays = [], statuses = new Map();
   let selectedChoice = 0;
   const theme = { appearance: 'dark', fg(_color, text) { return text; }, style(text) { return text; } };
   const tui = {
@@ -29,7 +29,7 @@ const { createJiti } = require('jiti');
   };
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
   const ctx = { mode: 'tui', hasUI: true, ui: {
-    setStatus() {}, notify() {}, addAutocompleteProvider() {},
+    setStatus(key, value) { statuses.set(key, value); }, notify() {}, addAutocompleteProvider() {},
     async select(_title, choices) { return selectedChoice === null ? undefined : choices[selectedChoice]; },
     setWidget(key, value) { widgets.set(key, typeof value === 'function' ? value(tui, theme) : value); },
     async custom(factory) {
@@ -52,13 +52,48 @@ const { createJiti } = require('jiti');
   extension(pi);
   try {
     await handlers.session_start({}, ctx);
+    assert.match(statuses.get('ide-bridge'), /^IDE: not connected/);
     const port = fs.readFileSync(path.join(dir, 'ide-bridge.port'), 'utf8');
     const post = async (data, route = '/editor-insert') => {
       const response = await fetch(`http://127.0.0.1:${port}${route}`, {
-        method: 'POST', body: JSON.stringify(data),
+        method: 'POST', headers: { Connection: 'close' }, body: JSON.stringify(data),
       });
       assert.equal(response.status, 200);
     };
+    await post({ editor: 'vscode', activeFile: 'D:\\src\\hello.c', workspaceRoot: 'D:\\src', openFiles: [], selection: null }, '/ide-state');
+    assert.equal(statuses.get('ide-bridge'), 'VS Code: connected');
+    // Live state alone must never attach an active file, workspace, or selection.
+    assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
+    const liveState = { editor: 'vscode', activeFile: 'D:\\private\\active.c', workspaceRoot: 'D:\\private',
+      openFiles: ['D:\\private\\other.c'], selection: { text: 'unattached_secret', startLine: 4, endLine: 4 } };
+    await post(liveState, '/ide-state');
+    assert.equal(widgets.get('ide-attachments'), undefined);
+    assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
+    // Explicit file attachments do not pull in the unrelated live editor state.
+    await post({ type: 'file', path: 'D:\\src\\explicit.c' });
+    const explicitFile = await handlers.before_agent_start({ messageType: 'user' }, ctx);
+    assert.equal(explicitFile.message.content,
+      "Attached IDE file: D:\\src\\explicit.c\nRead this file when needed for the user's request.");
+    assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
+    // Explicit selection commands still populate the list; refreshed live state stays private.
+    await post(liveState, '/ide-state');
+    await commands['ide-insert-selection'].handler('', ctx);
+    assert.ok(widgets.get('ide-attachments'));
+    await post({ ...liveState, activeFile: 'D:\\private\\new-active.c',
+      selection: { text: 'new_unattached_secret', startLine: 8, endLine: 8 } }, '/ide-state');
+    const explicitSelection = await handlers.before_agent_start({ messageType: 'user' }, ctx);
+    assert.equal(explicitSelection.message.content,
+      'Attached IDE selection: D:\\private\\active.c 5:5\n\nunattached_secret');
+    assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
+    // Removing or clearing attachments cannot be undone by subsequent state updates.
+    for (const command of ['ide-remove-attachment', 'ide-clear-attachments']) {
+      await commands['ide-insert-active-file'].handler('', ctx);
+      await commands[command].handler('', ctx);
+      await post(liveState, '/ide-state');
+      assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
+    }
+    await post({ editor: 'vscode', activeFile: null, workspaceRoot: 'D:\\src', openFiles: [], selection: null }, '/ide-state');
+    assert.equal(statuses.get('ide-bridge'), 'VS Code: connected');
     await post({ type: 'file', path: 'D:\\src\\hello.c' });
     await post({ type: 'text', text: '  int x = 1;\n', path: 'D:\\src\\hello.c', startLine: 0, endLine: 99 });
     assert.deepEqual(pasted, []);
@@ -183,9 +218,10 @@ const { createJiti } = require('jiti');
     assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
     await post({ type: 'terminal', text: 'terminal text' });
     assert.deepEqual(pasted, ['terminal text']);
-    // Removing a selection also clears the matching cached automatic selection.
+    // Removing a selection clears the matching cached selection.
     await post({ editor: 'vscode', activeFile: 'D:\\src\\selection.c', workspaceRoot: 'D:\\src', openFiles: [],
       selection: { text: 'removed_selection_text', startLine: 10, endLine: 10 } }, '/ide-state');
+    assert.equal(statuses.get('ide-bridge'), 'VS Code: connected');
     await post({ type: 'text', text: 'removed_selection_text', path: 'D:\\src\\selection.c', startLine: 10, endLine: 10 });
     await post({ type: 'file', path: 'D:\\src\\retained.c' });
     const pendingWidget = widgets.get('ide-attachments');
@@ -198,8 +234,56 @@ const { createJiti } = require('jiti');
     const afterRemoval = await handlers.before_agent_start({ messageType: 'user' }, ctx);
     assert.doesNotMatch(afterRemoval.message.content, /removed_selection_text|Attached IDE selection/);
     assert.match(afterRemoval.message.content, /retained.c/);
+    assert.doesNotMatch(afterRemoval.message.content, /Active IDE file:|IDE workspace root:|selection\.c/);
+    // Restored state after reload must not become an implicit attachment either.
+    await post(liveState, '/ide-state');
+    await handlers.session_shutdown({}, ctx);
+    await handlers.session_start({}, ctx);
+    assert.equal(statuses.get('ide-bridge'), 'VS Code: connected');
+    assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
     assert.equal(listeners.size, 0);
-    console.log('PASS: single-remove clicks/commands/picker, wrapped hit areas, duplicate filenames, safe press/right-click, stale events, cancelled hover, cached selection cleanup, previews, layouts, one-shot context, clear, terminal paste');
+    // Opt-in includes only the active reference, never automatic selections/workspace.
+    const settingsPath = path.join(dir, 'ide-bridge-settings.json');
+    await commands['ide-auto-file'].handler('', ctx);
+    assert.equal(fs.existsSync(settingsPath), false);
+    await commands['ide-auto-file'].handler('invalid', ctx);
+    assert.equal(fs.existsSync(settingsPath), false);
+    await commands['ide-auto-file'].handler('on', ctx);
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { autoIncludeActiveFile: true });
+    const expectedAuto = `Active IDE file: ${liveState.activeFile}`;
+    await post(liveState, '/ide-state');
+    assert.equal((await handlers.before_agent_start({ messageType: 'user' }, ctx)).message.content, expectedAuto);
+    assert.equal((await handlers.before_agent_start({ messageType: 'user' }, ctx)).message.content, expectedAuto);
+    await commands['ide-auto-file'].handler('invalid', ctx);
+    assert.equal((await handlers.before_agent_start({ messageType: 'user' }, ctx)).message.content, expectedAuto);
+    await post({ type: 'file', path: liveState.activeFile });
+    const deduped = await handlers.before_agent_start({ messageType: 'user' }, ctx);
+    assert.match(deduped.message.content, /^Attached IDE file:/);
+    assert.doesNotMatch(deduped.message.content, /Active IDE file:/);
+    await post({ type: 'file', path: 'D:\\src\\explicit.c' });
+    const combined = await handlers.before_agent_start({ messageType: 'user' }, ctx);
+    assert.ok(combined.message.content.startsWith(expectedAuto));
+    assert.match(combined.message.content, /Attached IDE file: D:\\src\\explicit.c/);
+    await handlers.session_shutdown({}, ctx);
+    await handlers.session_start({}, ctx);
+    assert.equal((await handlers.before_agent_start({ messageType: 'user' }, ctx)).message.content, expectedAuto);
+    await post({ ...liveState, activeFile: null }, '/ide-state');
+    assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
+    await commands['ide-auto-file'].handler('off', ctx);
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { autoIncludeActiveFile: false });
+    await post(liveState, '/ide-state');
+    assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
+    await handlers.session_shutdown({}, ctx);
+    await handlers.session_start({}, ctx);
+    assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
+    // Invalid settings fail closed, including truthy non-boolean values.
+    for (const raw of ['{', '{"autoIncludeActiveFile":"true"}']) {
+      await handlers.session_shutdown({}, ctx);
+      fs.writeFileSync(settingsPath, raw);
+      await handlers.session_start({}, ctx);
+      assert.equal(await handlers.before_agent_start({ messageType: 'user' }, ctx), undefined);
+    }
+    console.log('PASS: default-off persistent auto-file switch, explicit-only selections, single-remove clicks/commands/picker, wrapped hit areas, duplicate filenames, safe press/right-click, stale events, cancelled hover, cached selection cleanup, previews, layouts, explicit-only context (including restored state), one-shot context, clear, terminal paste');
   } finally {
     await handlers.session_shutdown({}, ctx);
     fs.rmSync(dir, { recursive: true, force: true });

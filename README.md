@@ -4,7 +4,7 @@ Pi extension that bridges your IDE (VS Code, Cursor, Trae) with the Pi coding ag
 
 ## Features
 
-- **Live IDE context**: active file, workspace roots, open files, and current selection.
+- **Explicit IDE context by default**: files and selections reach the model only when attached. Automatic active-file references are optional and off by default; live IDE state remains available locally for commands and autocomplete.
 - **Multi-root workspace support**.
 - **Automatic connection state**: shows `VS Code: connected` / `Cursor: connected` / `Trae: connected` and falls back to `not connected` when the IDE closes.
 - **Heartbeats** via `/ide-ping` for accurate disconnect detection.
@@ -17,6 +17,7 @@ Pi extension that bridges your IDE (VS Code, Cursor, Trae) with the Pi coding ag
 - **Slash commands**:
   - `/ide init` — install the VS Code / Cursor / Trae companion extension
   - `/ide-state`
+  - `/ide-auto-file [on|off]` — enable/disable automatic active-file references; no argument shows status
   - `/ide-bridge-port`
   - `/ide-insert-active-file`
   - `/ide-insert-selection`
@@ -41,9 +42,31 @@ Send a file or selection from the IDE, type your request normally, then submit i
 
 - Hover a name for 250 ms to preview it. File previews read the current disk contents; selection previews show the saved text.
 - The wheel scrolls inside a hover preview; moving away or typing closes it. `/ide-preview` provides keyboard access with arrow/Page Up/Page Down scrolling and Escape to close.
-- Click `×` to remove only that pending item. Removal does not delete files or undo previously sent context. Original live IDE workspace/active-file context remains enabled.
+- Click `×` to remove only that pending item. Removal does not delete files or undo previously sent context. With the default settings, removed items are not reintroduced through live IDE state.
 - Mouse controls require fullscreen mode and terminal mouse reporting. In regular mode or multiplexers without hover support, use the slash commands. Attachment numbers are 1-based.
 - Previews are bounded to 200 lines / 64 KiB, reject binary files, and never modify attachment contents. Pending attachments are in memory: send or clear them before reloading, changing sessions, or exiting.
+
+### Automatic active-file setting
+
+Automatic IDE context is **off by default**. With an empty attachment list, no IDE context is sent, including after reload. The footer shows connection status only, without filenames or selection ranges.
+
+```text
+/ide-auto-file on    # Include the active file reference on each user prompt
+/ide-auto-file off   # Include only explicit attachments (default)
+/ide-auto-file       # Show the current setting
+```
+
+The setting also appears in `/ide-state` and persists globally across reloads/restarts in `~/.pi/agent/ide-bridge-settings.json` (or `$PI_AGENT_DIR/ide-bridge-settings.json`):
+
+```json
+{
+  "autoIncludeActiveFile": false
+}
+```
+
+Manual JSON edits take effect on `/reload`. Missing or invalid settings default to off. Command changes apply immediately to this Pi instance; other running instances pick them up on reload.
+
+When enabled and the IDE is connected, only the active file path is included automatically—not its contents, workspace roots, other open files, or live selections. Selections always require explicit attachment. An explicit whole-file attachment for the same path suppresses the duplicate automatic reference. Removing or clearing attachments does not disable automatic active-file context; use `/ide-auto-file off` to disable it.
 
 ### Companion compatibility
 
@@ -126,7 +149,7 @@ npm run compile
 npx vsce package --out pi-ide-bridge-vscode-local.vsix
 ```
 
-Install the generated VSIX with your editor's **Install from VSIX** command, then reload the editor. The attachment tests use a mock Pi UI and a real localhost HTTP server in a temporary state directory; they cover context delivery, previews, layouts, click/command removal, and cleanup. Actual terminal mouse interaction should also be checked manually.
+Install the generated VSIX with your editor's **Install from VSIX** command, then reload the editor. The attachment tests use a mock Pi UI and a real localhost HTTP server in a temporary state directory; they cover default-off context delivery, persistent on/off switching, invalid settings, restored IDE state, automatic-reference deduplication, previews, layouts, click/command removal, and cleanup. Actual terminal mouse interaction should also be checked manually.
 
 ## License
 
